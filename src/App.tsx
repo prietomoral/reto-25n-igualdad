@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Bike, Heart, Award, RotateCcw, Plus, Trophy, Sparkles, UserCheck, Gauge, Timer, Flag, School } from 'lucide-react';
 
 const GOAL_METERS = 1000;
+const DURATION_MINUTES = 2;
 
 interface RecordItem {
   id: number;
@@ -60,8 +61,8 @@ export default function App() {
   const cumulativePercentage = Math.min(100, Math.max(0, (cumulativeMeters / cumulativeGoal) * 100));
   const isGrandPrizeReached = cumulativeMeters >= cumulativeGoal && cumulativeGoal > 0;
 
-  // Cálculo de velocidad media en 1 minuto: (metros / 1000) * 60 = km/h
-  const currentSpeedKmh = ((currentMeters / 1000) * 60).toFixed(1);
+  // Cálculo de velocidad media en 2 minutos: (metros / 1000) * (60 / 2) = km/h
+  const currentSpeedKmh = ((currentMeters / 1000) * (60 / DURATION_MINUTES)).toFixed(1);
 
   useEffect(() => {
     if (isGoalReached && currentMeters > 0) {
@@ -89,7 +90,7 @@ export default function App() {
     if (isNaN(parsedMeters) || parsedMeters < 0) return;
 
     const nameToUse = participantName.trim() || `Ciclista #${history.length + 1}`;
-    const speed = ((parsedMeters / 1000) * 60).toFixed(1);
+    const speed = ((parsedMeters / 1000) * (60 / DURATION_MINUTES)).toFixed(1);
 
     setCurrentMeters(parsedMeters);
     setActiveParticipant(nameToUse);
@@ -258,7 +259,7 @@ export default function App() {
                 </div>
                 <div>
                   <h2 className="text-base font-extrabold uppercase tracking-wide text-white">
-                    Control de Etapa · 1 Min
+                    Control de Etapa · 2 Min
                   </h2>
                   <p className="text-xs text-violet-300 flex items-center gap-1">
                     <Timer className="w-3.5 h-3.5" /> Lectura sensor Bluetooth
@@ -283,7 +284,7 @@ export default function App() {
 
               <div>
                 <label className="block text-xs font-bold uppercase tracking-wider text-violet-200 mb-1.5">
-                  Metros completados en 60 segundos
+                  Metros completados en 2 minutos (120 s)
                 </label>
                 <div className="relative">
                   <input
@@ -308,7 +309,7 @@ export default function App() {
                 className="w-full py-4 px-6 rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white font-extrabold text-base uppercase tracking-wider shadow-lg shadow-violet-900/50 active:scale-[0.98] transition flex items-center justify-center gap-2.5 cursor-pointer border border-violet-300/25"
               >
                 <Bike className="w-5 h-5" />
-                Registrar Sprint
+                Registrar Etapa (2 min)
               </button>
             </form>
           </div>
@@ -371,7 +372,7 @@ export default function App() {
             <div className="flex items-center gap-2">
               <span className="inline-flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-violet-200 bg-violet-950 border border-violet-400/30 px-2.5 py-1.5 rounded-lg">
                 <PurpleRibbon className="w-3.5 h-4" />
-                Sprint: 1.000 m
+                2 min · 1.000 m
               </span>
 
               {activeParticipant && (
@@ -479,7 +480,7 @@ export default function App() {
             <div className="flex justify-between text-[10px] font-mono font-bold text-violet-300 mb-2">
               <span>SALIDA (0m)</span>
               <span className="text-emerald-400 flex items-center gap-1">
-                <Flag className="w-3 h-3" /> SPRINT (1.000m)
+                <Flag className="w-3 h-3" /> META 2 MIN (1.000m)
               </span>
             </div>
             <div className="relative h-2.5 bg-violet-950 rounded-full overflow-visible border border-violet-500/25">
@@ -500,12 +501,12 @@ export default function App() {
             {isGoalReached ? (
               <div className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-500/15 border border-emerald-400/40 text-emerald-300 font-bold text-xs">
                 <Sparkles className="w-4 h-4 shrink-0" />
-                <span>¡Sprint completado! Sumado a la meta 25N</span>
+                <span>¡Reto completado! Sumado a la meta 25N</span>
               </div>
             ) : (
               <p className="text-xs text-violet-200">
                 {currentMeters === 0
-                  ? 'En línea de salida. Registra los metros del sprint.'
+                  ? 'En línea de salida. Registra los metros de los 2 minutos.'
                   : `Faltan ${Math.max(0, GOAL_METERS - currentMeters)} m para llenar el corazón individual.`}
               </p>
             )}
