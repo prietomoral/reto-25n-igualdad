@@ -1,8 +1,27 @@
-import React, { useState, useEffect } from 'react';
-import { Bike, Heart, Award, RotateCcw, Plus, Trophy, Sparkles, UserCheck, Gauge, Timer, Flag, School } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import {
+  Bike,
+  Heart,
+  Award,
+  RotateCcw,
+  Plus,
+  Trophy,
+  Sparkles,
+  UserCheck,
+  Gauge,
+  Timer,
+  Flag,
+  School,
+  Bluetooth,
+  BluetoothConnected,
+  Play,
+  Square
+} from 'lucide-react';
 
 const GOAL_METERS = 1000;
 const DURATION_MINUTES = 2;
+const DURATION_SECONDS = DURATION_MINUTES * 60; // 120 segundos
+const WHEEL_CIRCUMFERENCE_METERS = 2.10; // Calibración del perímetro por vuelta del volante de inercia
 
 interface RecordItem {
   id: number;
@@ -55,14 +74,38 @@ export default function App() {
   const [cumulativeGoal, setCumulativeGoal] = useState(5000);
   const [showGrandPrizeCelebration, setShowGrandPrizeCelebration] = useState(false);
 
+  // Estados Bluetooth y Cronómetro de 2 minutos
+  const [btDeviceName, setBtDeviceName] = useState<string | null>(null);
+  const [btStatus, setBtStatus] = useState<string>('');
+  const [liveSpeedKmh, setLiveSpeedKmh] = useState<number>(0);
+  const [isStageRunning, setIsStageRunning] = useState(false);
+  const [timeLeft, setTimeLeft] = useState(DURATION_SECONDS);
+
+  // Referencias internas para lectura en tiempo real
+  const isStageRunningRef = useRef(false);
+  const lastSampleTimeRef = useRef<number | null>(null);
+  const initialCscRevsRef = useRef<number | null>(null);
+  const lastCscRevsRef = useRef<number | null>(null);
+  const lastCscTimeRef = useRef<number | null>(null);
+  const stageMetersRef = useRef<number>(0);
+  const activeParticipantRef = useRef<string>('');
+  const btDeviceRef = useRef<any>(null);
+
+  useEffect(() => {
+    isStageRunningRef.current = isStageRunning;
+  }, [isStageRunning]);
+
   const percentage = Math.min(100, Math.max(0, (currentMeters / GOAL_METERS) * 100));
   const isGoalReached = currentMeters >= GOAL_METERS;
 
   const cumulativePercentage = Math.min(100, Math.max(0, (cumulativeMeters / cumulativeGoal) * 100));
   const isGrandPrizeReached = cumulativeMeters >= cumulativeGoal && cumulativeGoal > 0;
 
-  // Cálculo de velocidad media en 2 minutos: (metros / 1000) * (60 / 2) = km/h
-  const currentSpeedKmh = ((currentMeters / 1000) * (60 / DURATION_MINUTES)).toFixed(1);
+  // Velocidad en directo (BT) o media de los 2 minutos (Manual / Finalizada)
+  const currentSpeedKmh =
+    isStageRunning && btDeviceName
+      ? liveSpeedKmh.toFixed(1)
+      : ((currentMeters / 1000) * (60 / DURATION_MINUTES)).toFixed(1);
 
   useEffect(() => {
     if (isGoalReached && currentMeters > 0) {
@@ -84,8 +127,179 @@ export default function App() {
     }
   }, [isGrandPrizeReached]);
 
+  // Cuenta atrás automática de 2 minutos (120 s) en modo Bluetooth
+  useEffect(() => {
+    if (!isStageRunning) return;
+
+    const interval = setInterval(() => {
+      setTimeLeft((prev) => {
+        if (prev <= 1) {
+          clearInterval(interval);
+          finishBluetoothStage();
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [isStageRunning]);
+
+  // Conexión Web Bluetooth (Soporta sensores CSC 0x1816 y bicis FTMS 0x1826)
+  const handleConnectBluetooth = async () => {
+    const nav = navigator as any;
+    if (!nav.bluetooth) {
+      setBtStatus('Tu navegador no soporta Bluetooth. Usa Chrome o Edge en PC o Android.');
+      return;
+    }
+
+    try {
+      setBtStatus('Buscando sensor Bluetooth...');
+      const device = await nav.bluetooth.requestDevice({
+        filters: [
+          { services: ['cycling_speed_and_cadence'] },
+          { services: ['fitness_machine'] }
+        ],
+        optionalServices: ['cycling_speed_and_cadence', 'fitness_machine']
+      });
+
+      btDeviceRef.current = device;
+      device.addEventListener('gattserverdisconnected', () => {
+        setBtDeviceName(null);
+        setBtStatus('Sensor desconectado');
+        setIsStageRunning(false);
+        setLiveSpeedKmh(0);
+      });
+
+      const server = await device.gatt.connect();
+      setBtDeviceName(device.name || 'Sensor Bicicleta BT');
+
+      // 1. Probar estándar CSC (Sensor de velocidad/cadencia tipo Magene, CooSpo, Decathlon)
+      try {
+        const cscService = await server.getPrimaryService('cycling_speed_and_cadence');
+        const cscChar = await cscService.getCharacteristic('csc_measurement');
+        await cscChar.startNotifications();
+
+        cscChar.addEventListener('characteristicvaluechanged', (event: any) => {
+          const value: DataView = event.target.value;
+          const flags = value.getUint8(0);
+
+          // Bit 0 en 1 = Wheel Revolution Data Present (Modo Velocidad)
+          if ((flags & 1) !== 0) {
+            const cumulativeWheelRevs = value.getUint32(1, true);
+            const lastWheelEventTime = value.getUint16(5, true); // unidades de 1/1024 s
+
+            if (lastCscRevsRef.current !== null && lastCscTimeRef.current !== null) {
+              const revDelta = cumulativeWheelRevs - lastCscRevsRef.current;
+              let timeDelta = lastWheelEventTime - lastCscTimeRef.current;
+              if (timeDelta < 0) timeDelta += 65536;
+
+              if (revDelta > 0 && timeDelta > 0) {
+                const seconds = timeDelta / 1024;
+                const speedMs = (revDelta * WHEEL_CIRCUMFERENCE_METERS) / seconds;
+                setLiveSpeedKmh(speedMs * 3.6);
+              } else if (revDelta === 0) {
+                setLiveSpeedKmh(0);
+              }
+            }
+            lastCscRevsRef.current = cumulativeWheelRevs;
+            lastCscTimeRef.current = lastWheelEventTime;
+
+            if (isStageRunningRef.current) {
+              if (initialCscRevsRef.current === null) {
+                initialCscRevsRef.current = cumulativeWheelRevs;
+              }
+              const revsDiff = Math.max(0, cumulativeWheelRevs - initialCscRevsRef.current);
+              const meters = Math.round(revsDiff * WHEEL_CIRCUMFERENCE_METERS);
+              stageMetersRef.current = meters;
+              setCurrentMeters(meters);
+            }
+          } else {
+            setBtStatus('Aviso: Sensor en modo Cadencia (LED rojo). Saca y mete la pila para pasarlo a Velocidad.');
+          }
+        });
+
+        setBtStatus('Conectado (Sensor Velocidad CSC listo)');
+        return;
+      } catch {
+        // Si no es CSC, probamos FTMS
+      }
+
+      // 2. Probar estándar FTMS (Bicis inteligentes)
+      const ftmsService = await server.getPrimaryService('fitness_machine');
+      const indoorBikeChar = await ftmsService.getCharacteristic('indoor_bike_data');
+      await indoorBikeChar.startNotifications();
+
+      indoorBikeChar.addEventListener('characteristicvaluechanged', (event: any) => {
+        const value: DataView = event.target.value;
+        const flags = value.getUint16(0, true);
+        if ((flags & 1) === 0) {
+          const speedKmh = value.getUint16(2, true) / 100;
+          setLiveSpeedKmh(speedKmh);
+
+          if (isStageRunningRef.current) {
+            const now = Date.now();
+            if (lastSampleTimeRef.current !== null) {
+              const deltaSeconds = (now - lastSampleTimeRef.current) / 1000;
+              stageMetersRef.current += (speedKmh / 3.6) * deltaSeconds;
+              setCurrentMeters(Math.round(stageMetersRef.current));
+            }
+            lastSampleTimeRef.current = now;
+          }
+        }
+      });
+
+      setBtStatus('Conectado (Estándar FTMS listo)');
+    } catch (err: any) {
+      if (err?.name !== 'NotFoundError') {
+        setBtStatus('No se pudo conectar. Gira los pedales para despertar el sensor.');
+      } else {
+        setBtStatus('');
+      }
+    }
+  };
+
+  const startBluetoothStage = () => {
+    const nameToUse = participantName.trim() || `Ciclista #${history.length + 1}`;
+    activeParticipantRef.current = nameToUse;
+    setActiveParticipant(nameToUse);
+    setParticipantName('');
+
+    stageMetersRef.current = 0;
+    lastSampleTimeRef.current = Date.now();
+    initialCscRevsRef.current = null;
+    setCurrentMeters(0);
+    setTimeLeft(DURATION_SECONDS);
+    setIsStageRunning(true);
+  };
+
+  const finishBluetoothStage = () => {
+    setIsStageRunning(false);
+    setLiveSpeedKmh(0);
+    const finalMeters = Math.round(stageMetersRef.current);
+    const nameToUse = activeParticipantRef.current || `Ciclista #${history.length + 1}`;
+    const speed = ((finalMeters / 1000) * (60 / DURATION_MINUTES)).toFixed(1);
+
+    setCurrentMeters(finalMeters);
+    setCumulativeMeters((prev) => prev + finalMeters);
+
+    const newRecord: RecordItem = {
+      id: Date.now(),
+      name: nameToUse,
+      meters: finalMeters,
+      speedKmh: speed,
+      percentage: Math.min(100, Math.round((finalMeters / GOAL_METERS) * 100)),
+      completed: finalMeters >= GOAL_METERS,
+      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    };
+
+    setHistory((prev) => [newRecord, ...prev]);
+  };
+
+  // Registro manual (funciona siempre, con o sin sensor conectado)
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    setIsStageRunning(false);
     const parsedMeters = parseFloat(metersInput);
     if (isNaN(parsedMeters) || parsedMeters < 0) return;
 
@@ -119,6 +333,8 @@ export default function App() {
   };
 
   const handleResetIndividual = () => {
+    setIsStageRunning(false);
+    setTimeLeft(DURATION_SECONDS);
     setCurrentMeters(0);
     setActiveParticipant('');
     setMetersInput('');
@@ -137,10 +353,15 @@ export default function App() {
     setShowGrandPrizeCelebration(false);
   };
 
+  const formatTimer = (secs: number) => {
+    const m = Math.floor(secs / 60);
+    const s = secs % 60;
+    return `${m}:${s < 10 ? '0' : ''}${s}`;
+  };
+
   const totalEventKm = (cumulativeMeters / 1000).toFixed(2);
   const fillY = 92 - (percentage / 100) * 82;
 
-  // Etapas simbólicas del 25N en la subida hacia la meta colectiva
   const stageMilestones = [
     { ratio: 1, label: 'META 25N · LIBERTAD', isFinish: true },
     { ratio: 0.75, label: 'SORORIDAD', isFinish: false },
@@ -249,10 +470,10 @@ export default function App() {
       {/* Contenido Principal */}
       <main className="relative z-10 max-w-7xl mx-auto px-4 py-8 grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
         
-        {/* Columna Izquierda (4 cols): Consola de Control */}
+        {/* Columna Izquierda (4 cols): Consola Bluetooth + Entrada Manual */}
         <section className="lg:col-span-4 bg-[#181132]/90 backdrop-blur-xl border border-violet-400/25 rounded-2xl p-6 shadow-2xl flex flex-col justify-between">
           <div>
-            <div className="flex items-center justify-between mb-5 pb-3.5 border-b border-violet-400/15">
+            <div className="flex items-center justify-between mb-4 pb-3 border-b border-violet-400/15">
               <div className="flex items-center gap-3">
                 <div className="p-2.5 rounded-xl bg-violet-600/30 border border-violet-400/40">
                   <Bike className="w-6 h-6 text-violet-300" />
@@ -262,13 +483,67 @@ export default function App() {
                     Control de Etapa · 2 Min
                   </h2>
                   <p className="text-xs text-violet-300 flex items-center gap-1">
-                    <Timer className="w-3.5 h-3.5" /> Lectura sensor Bluetooth
+                    <Timer className="w-3.5 h-3.5" /> Automático Bluetooth o Manual
                   </p>
                 </div>
               </div>
             </div>
 
-            <form onSubmit={handleSubmit} className="space-y-4">
+            {/* Tarjeta de Conexión Bluetooth con el Sensor de la Bicicleta */}
+            <div className="mb-4 p-3.5 rounded-xl bg-[#0b0718] border border-sky-400/30 space-y-2.5">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  {btDeviceName ? (
+                    <BluetoothConnected className="w-4 h-4 text-emerald-400 shrink-0 animate-pulse" />
+                  ) : (
+                    <Bluetooth className="w-4 h-4 text-sky-400 shrink-0" />
+                  )}
+                  <span className="text-xs font-bold text-white truncate">
+                    {btDeviceName ? btDeviceName : 'Modo Automático · Sensor BT'}
+                  </span>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleConnectBluetooth}
+                  className="px-3 py-1.5 rounded-lg bg-sky-500/20 hover:bg-sky-500/30 border border-sky-400/40 text-sky-300 text-xs font-extrabold transition cursor-pointer shrink-0"
+                >
+                  {btDeviceName ? 'Reconectar' : 'Conectar Bici'}
+                </button>
+              </div>
+
+              {btStatus && (
+                <p className="text-[11px] text-sky-200/85 leading-snug">{btStatus}</p>
+              )}
+
+              {btDeviceName && (
+                <div className="pt-2 border-t border-white/10 flex items-center justify-between gap-2">
+                  <div className="font-mono text-lg font-black text-emerald-400">
+                    {formatTimer(timeLeft)}
+                  </div>
+                  {!isStageRunning ? (
+                    <button
+                      type="button"
+                      onClick={startBluetoothStage}
+                      className="px-3.5 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs uppercase tracking-wider flex items-center gap-1.5 cursor-pointer transition"
+                    >
+                      <Play className="w-3.5 h-3.5 fill-slate-950" /> Iniciar 2 Min
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={finishBluetoothStage}
+                      className="px-3.5 py-2 rounded-lg bg-rose-500 hover:bg-rose-400 text-white font-black text-xs uppercase tracking-wider flex items-center gap-1.5 cursor-pointer transition"
+                    >
+                      <Square className="w-3.5 h-3.5 fill-white" /> Finalizar y Guardar
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Formulario de Participante y Entrada Manual */}
+            <form onSubmit={handleSubmit} className="space-y-3.5">
               <div>
                 <label className="block text-xs font-bold uppercase tracking-wider text-violet-200 mb-1.5">
                   Nombre, Curso o Número de Dorsal
@@ -278,13 +553,13 @@ export default function App() {
                   placeholder="Ej. Laura G. (3º ESO) · Dorsal 14"
                   value={participantName}
                   onChange={(e) => setParticipantName(e.target.value)}
-                  className="w-full px-4 py-3 rounded-xl bg-[#0b0718] border border-violet-400/25 text-white placeholder-violet-400/40 focus:outline-none focus:ring-2 focus:ring-violet-400 transition"
+                  className="w-full px-4 py-2.5 rounded-xl bg-[#0b0718] border border-violet-400/25 text-white placeholder-violet-400/40 focus:outline-none focus:ring-2 focus:ring-violet-400 transition"
                 />
               </div>
 
               <div>
                 <label className="block text-xs font-bold uppercase tracking-wider text-violet-200 mb-1.5">
-                  Metros completados en 2 minutos (120 s)
+                  Modo Manual · Metros en 2 minutos (120 s)
                 </label>
                 <div className="relative">
                   <input
@@ -296,7 +571,7 @@ export default function App() {
                     placeholder="0 - 1000"
                     value={metersInput}
                     onChange={(e) => setMetersInput(e.target.value)}
-                    className="w-full px-4 py-4 pr-24 rounded-xl bg-[#0b0718] border border-violet-400/35 text-3xl font-black font-mono text-white placeholder-violet-400/30 focus:outline-none focus:ring-2 focus:ring-emerald-400 transition"
+                    className="w-full px-4 py-3.5 pr-24 rounded-xl bg-[#0b0718] border border-violet-400/35 text-2xl font-black font-mono text-white placeholder-violet-400/30 focus:outline-none focus:ring-2 focus:ring-emerald-400 transition"
                   />
                   <span className="absolute right-3.5 top-1/2 -translate-y-1/2 text-xs font-extrabold uppercase tracking-wider text-violet-200 bg-violet-900/80 border border-violet-500/30 px-2.5 py-1.5 rounded-lg">
                     metros
@@ -306,16 +581,16 @@ export default function App() {
 
               <button
                 type="submit"
-                className="w-full py-4 px-6 rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white font-extrabold text-base uppercase tracking-wider shadow-lg shadow-violet-900/50 active:scale-[0.98] transition flex items-center justify-center gap-2.5 cursor-pointer border border-violet-300/25"
+                className="w-full py-3.5 px-6 rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white font-extrabold text-sm uppercase tracking-wider shadow-lg shadow-violet-900/50 active:scale-[0.98] transition flex items-center justify-center gap-2.5 cursor-pointer border border-violet-300/25"
               >
                 <Bike className="w-5 h-5" />
-                Registrar Etapa (2 min)
+                Registrar Etapa Manual (2 min)
               </button>
             </form>
           </div>
 
           {/* Controles rápidos y gestión del reto */}
-          <div className="mt-6 pt-5 border-t border-violet-400/15 space-y-4">
+          <div className="mt-5 pt-4 border-t border-violet-400/15 space-y-3">
             <div>
               <div className="flex items-center justify-between mb-2">
                 <span className="text-xs font-semibold text-violet-300">Simulación rápida (+ individual y meta):</span>
@@ -326,7 +601,7 @@ export default function App() {
                     key={val}
                     type="button"
                     onClick={() => handleQuickAdd(val)}
-                    className="py-2.5 px-2 rounded-xl bg-[#0b0718] hover:bg-violet-900/50 border border-violet-400/20 text-xs font-mono font-bold text-violet-100 flex items-center justify-center gap-1 transition cursor-pointer"
+                    className="py-2 px-2 rounded-xl bg-[#0b0718] hover:bg-violet-900/50 border border-violet-400/20 text-xs font-mono font-bold text-violet-100 flex items-center justify-center gap-1 transition cursor-pointer"
                   >
                     <Plus className="w-3.5 h-3.5 text-emerald-400" /> {val}m
                   </button>
@@ -372,7 +647,7 @@ export default function App() {
             <div className="flex items-center gap-2">
               <span className="inline-flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-violet-200 bg-violet-950 border border-violet-400/30 px-2.5 py-1.5 rounded-lg">
                 <PurpleRibbon className="w-3.5 h-4" />
-                2 min · 1.000 m
+                {isStageRunning ? `En curso · ${formatTimer(timeLeft)}` : '2 min · 1.000 m'}
               </span>
 
               {activeParticipant && (
@@ -393,7 +668,7 @@ export default function App() {
             <svg
               viewBox="0 0 200 200"
               className="w-60 h-60 sm:w-64 sm:h-64 absolute opacity-20 pointer-events-none animate-spin"
-              style={{ animationDuration: isGoalReached ? '4s' : '18s' }}
+              style={{ animationDuration: isStageRunning || isGoalReached ? '3s' : '18s' }}
             >
               <circle cx="100" cy="100" r="92" fill="none" stroke="#a78bfa" strokeWidth="5" strokeDasharray="12 6" />
               <circle cx="100" cy="100" r="84" fill="none" stroke="#c4b5fd" strokeWidth="2" />
@@ -442,7 +717,7 @@ export default function App() {
                     width="100"
                     height="100"
                     fill="url(#violetEnergyGradient)"
-                    style={{ transition: 'y 0.9s cubic-bezier(0.22, 1, 0.36, 1)' }}
+                    style={{ transition: 'y 0.4s ease-out' }}
                   />
                   {percentage > 0 && percentage < 100 && (
                     <rect
@@ -451,7 +726,7 @@ export default function App() {
                       width="100"
                       height="2"
                       fill="#34d399"
-                      style={{ transition: 'y 0.9s cubic-bezier(0.22, 1, 0.36, 1)' }}
+                      style={{ transition: 'y 0.4s ease-out' }}
                     />
                   )}
                 </g>
@@ -485,11 +760,11 @@ export default function App() {
             </div>
             <div className="relative h-2.5 bg-violet-950 rounded-full overflow-visible border border-violet-500/25">
               <div
-                className="h-full bg-gradient-to-r from-violet-600 to-emerald-400 rounded-full transition-all duration-700"
+                className="h-full bg-gradient-to-r from-violet-600 to-emerald-400 rounded-full transition-all duration-300"
                 style={{ width: `${percentage}%` }}
               />
               <div
-                className="absolute -top-3.5 -translate-x-1/2 bg-violet-600 text-white p-1 rounded-full border-2 border-white shadow-md transition-all duration-700"
+                className="absolute -top-3.5 -translate-x-1/2 bg-violet-600 text-white p-1 rounded-full border-2 border-white shadow-md transition-all duration-300"
                 style={{ left: `${percentage}%` }}
               >
                 <Bike className="w-3.5 h-3.5" />
@@ -505,8 +780,10 @@ export default function App() {
               </div>
             ) : (
               <p className="text-xs text-violet-200">
-                {currentMeters === 0
-                  ? 'En línea de salida. Registra los metros de los 2 minutos.'
+                {isStageRunning
+                  ? '¡Pedalea fuerte! Contando metros en directo...'
+                  : currentMeters === 0
+                  ? 'Conecta el sensor o registra los metros de los 2 minutos.'
                   : `Faltan ${Math.max(0, GOAL_METERS - currentMeters)} m para llenar el corazón individual.`}
               </p>
             )}
