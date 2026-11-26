@@ -19,8 +19,8 @@ import {
 } from 'lucide-react';
 
 const GOAL_METERS = 1000;
-const DURATION_MINUTES = 2;
-const DURATION_SECONDS = DURATION_MINUTES * 60; // 120 segundos
+const DURATION_MINUTES = 1;
+const DURATION_SECONDS = DURATION_MINUTES * 60; // 60 segundos
 const WHEEL_CIRCUMFERENCE_METERS = 2.10; // Calibración del perímetro por vuelta del volante de inercia
 
 interface RecordItem {
@@ -74,7 +74,7 @@ export default function App() {
   const [cumulativeGoal, setCumulativeGoal] = useState(5000);
   const [showGrandPrizeCelebration, setShowGrandPrizeCelebration] = useState(false);
 
-  // Estados Bluetooth y Cronómetro de 2 minutos
+  // Estados Bluetooth y Cronómetro de 1 minuto
   const [btDeviceName, setBtDeviceName] = useState<string | null>(null);
   const [btStatus, setBtStatus] = useState<string>('');
   const [liveSpeedKmh, setLiveSpeedKmh] = useState<number>(0);
@@ -101,7 +101,7 @@ export default function App() {
   const cumulativePercentage = Math.min(100, Math.max(0, (cumulativeMeters / cumulativeGoal) * 100));
   const isGrandPrizeReached = cumulativeMeters >= cumulativeGoal && cumulativeGoal > 0;
 
-  // Velocidad en directo (BT) o media de los 2 minutos (Manual / Finalizada)
+  // Velocidad en directo (BT) o media de 1 minuto (Manual / Finalizada)
   const currentSpeedKmh =
     isStageRunning && btDeviceName
       ? liveSpeedKmh.toFixed(1)
@@ -127,7 +127,7 @@ export default function App() {
     }
   }, [isGrandPrizeReached]);
 
-  // Cuenta atrás automática de 2 minutos (120 s) en modo Bluetooth
+  // Cuenta atrás automática de 1 minuto (60 s) en modo Bluetooth
   useEffect(() => {
     if (!isStageRunning) return;
 
@@ -480,7 +480,7 @@ export default function App() {
                 </div>
                 <div>
                   <h2 className="text-base font-extrabold uppercase tracking-wide text-white">
-                    Control de Etapa · 2 Min
+                    Control de Etapa · 1 Min
                   </h2>
                   <p className="text-xs text-violet-300 flex items-center gap-1">
                     <Timer className="w-3.5 h-3.5" /> Automático Bluetooth o Manual
@@ -527,7 +527,7 @@ export default function App() {
                       onClick={startBluetoothStage}
                       className="px-3.5 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs uppercase tracking-wider flex items-center gap-1.5 cursor-pointer transition"
                     >
-                      <Play className="w-3.5 h-3.5 fill-slate-950" /> Iniciar 2 Min
+                      <Play className="w-3.5 h-3.5 fill-slate-950" /> Iniciar 1 Min
                     </button>
                   ) : (
                     <button
@@ -559,7 +559,7 @@ export default function App() {
 
               <div>
                 <label className="block text-xs font-bold uppercase tracking-wider text-violet-200 mb-1.5">
-                  Modo Manual · Metros en 2 minutos (120 s)
+                  Modo Manual · Metros en 1 minuto (60 s)
                 </label>
                 <div className="relative">
                   <input
@@ -584,7 +584,7 @@ export default function App() {
                 className="w-full py-3.5 px-6 rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white font-extrabold text-sm uppercase tracking-wider shadow-lg shadow-violet-900/50 active:scale-[0.98] transition flex items-center justify-center gap-2.5 cursor-pointer border border-violet-300/25"
               >
                 <Bike className="w-5 h-5" />
-                Registrar Etapa Manual (2 min)
+                Registrar Etapa Manual (1 min)
               </button>
             </form>
           </div>
@@ -647,7 +647,7 @@ export default function App() {
             <div className="flex items-center gap-2">
               <span className="inline-flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-violet-200 bg-violet-950 border border-violet-400/30 px-2.5 py-1.5 rounded-lg">
                 <PurpleRibbon className="w-3.5 h-4" />
-                {isStageRunning ? `En curso · ${formatTimer(timeLeft)}` : '2 min · 1.000 m'}
+                {isStageRunning ? `En curso · ${formatTimer(timeLeft)}` : '1 min · 1.000 m'}
               </span>
 
               {activeParticipant && (
@@ -755,7 +755,7 @@ export default function App() {
             <div className="flex justify-between text-[10px] font-mono font-bold text-violet-300 mb-2">
               <span>SALIDA (0m)</span>
               <span className="text-emerald-400 flex items-center gap-1">
-                <Flag className="w-3 h-3" /> META 2 MIN (1.000m)
+                <Flag className="w-3 h-3" /> META 1 MIN (1.000m)
               </span>
             </div>
             <div className="relative h-2.5 bg-violet-950 rounded-full overflow-visible border border-violet-500/25">
@@ -783,7 +783,7 @@ export default function App() {
                 {isStageRunning
                   ? '¡Pedalea fuerte! Contando metros en directo...'
                   : currentMeters === 0
-                  ? 'Conecta el sensor o registra los metros de los 2 minutos.'
+                  ? 'Conecta el sensor o registra los metros de 1 minuto.'
                   : `Faltan ${Math.max(0, GOAL_METERS - currentMeters)} m para llenar el corazón individual.`}
               </p>
             )}
